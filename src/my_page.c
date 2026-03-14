@@ -63,6 +63,7 @@ lv_obj_t * slider_v_offset;
 lv_obj_t * btn_auto;
 lv_obj_t * label_meas_ch1;
 lv_obj_t * label_meas_ch2;
+lv_obj_t * label_fps;
 
 // ADC 时基配置
 #define ADC_SAMPLE_RATE 100000  // 100 kSPS
@@ -116,8 +117,7 @@ void chart_touch_event_cb(lv_event_t * e) {
             trigger_level += dy * 2;
             trigger_level = CONSTRAIN(trigger_level, -200, 200);
             lv_coord_t * y_array = lv_chart_get_y_array(my_chart, ser_trigger);
-            int32_t display_val = trigger_level + ch1_offset;
-            for(int i = 0; i < 100; i++) y_array[i] = display_val;
+            for(int i = 0; i < 100; i++) y_array[i] = trigger_level;
             lv_obj_invalidate(my_chart);
             touch_last = p;
         }
@@ -167,8 +167,7 @@ void update_chart_y_range(void) {
     lv_chart_set_range(my_chart, LV_CHART_AXIS_SECONDARY_Y, ch2_min, ch2_max);
 
     lv_coord_t * y_trig = lv_chart_get_y_array(my_chart, ser_trigger);
-    int32_t display_val = trigger_level + ch1_offset;
-    for(int i = 0; i < 100; i++) y_trig[i] = display_val;
+    for(int i = 0; i < 100; i++) y_trig[i] = trigger_level;
 
     lv_chart_refresh(my_chart);
 }
@@ -238,7 +237,7 @@ void btn_auto_event_cb(lv_event_t * e) {
     trigger_level = center1;
     lv_coord_t * trigger_array = lv_chart_get_y_array(my_chart, ser_trigger);
     for(int i = 0; i < 100; i++) {
-        trigger_array[i] = trigger_level + ch1_offset;
+        trigger_array[i] = trigger_level;
     }
 
     lv_chart_set_zoom_x(my_chart, 256);
@@ -361,9 +360,9 @@ void update_task_cb(lv_timer_t * timer) {
                     }
                 } else {
                     bool edge = false;
-                    if(ch1_trigger_mode == TRIG_RISING && ch1_trig.last_val < trigger_level && val_ch1 >= trigger_level) {
+                    if(ch1_trigger_mode == TRIG_RISING && ch1_trig.last_val <= trigger_level && val_ch1 > trigger_level) {
                         edge = true;
-                    } else if(ch1_trigger_mode == TRIG_FALLING && ch1_trig.last_val > trigger_level && val_ch1 <= trigger_level) {
+                    } else if(ch1_trigger_mode == TRIG_FALLING && ch1_trig.last_val >= trigger_level && val_ch1 < trigger_level) {
                         edge = true;
                     }
                     if(edge) {
@@ -376,8 +375,9 @@ void update_task_cb(lv_timer_t * timer) {
                 ch1_trig.capture_count++;
                 if(ch1_trig.capture_count >= CHART_DISPLAY_POINTS) {
                     lv_coord_t * y1 = lv_chart_get_y_array(my_chart, ser1);
+                    int start_idx = (ch1_trig.trigger_idx + RING_BUFFER_SIZE) % RING_BUFFER_SIZE;
                     for(int i = 0; i < CHART_DISPLAY_POINTS; i++)
-                        y1[i] = ring_buffer_ch1[(ch1_trig.trigger_idx + i) % RING_BUFFER_SIZE];
+                        y1[i] = ring_buffer_ch1[(start_idx + i) % RING_BUFFER_SIZE];
                     ser1->start_point = 0;
                     ch1_trig.is_triggered = false;
                     ch1_trig.trigger_armed = false;
@@ -398,9 +398,9 @@ void update_task_cb(lv_timer_t * timer) {
                     }
                 } else {
                     bool edge = false;
-                    if(ch2_trigger_mode == TRIG_RISING && ch2_trig.last_val < trigger_level && val_ch2 >= trigger_level) {
+                    if(ch2_trigger_mode == TRIG_RISING && ch2_trig.last_val <= trigger_level && val_ch2 > trigger_level) {
                         edge = true;
-                    } else if(ch2_trigger_mode == TRIG_FALLING && ch2_trig.last_val > trigger_level && val_ch2 <= trigger_level) {
+                    } else if(ch2_trigger_mode == TRIG_FALLING && ch2_trig.last_val >= trigger_level && val_ch2 < trigger_level) {
                         edge = true;
                     }
                     if(edge) {
@@ -413,8 +413,9 @@ void update_task_cb(lv_timer_t * timer) {
                 ch2_trig.capture_count++;
                 if(ch2_trig.capture_count >= CHART_DISPLAY_POINTS) {
                     lv_coord_t * y2 = lv_chart_get_y_array(my_chart, ser2);
+                    int start_idx = (ch2_trig.trigger_idx + RING_BUFFER_SIZE) % RING_BUFFER_SIZE;
                     for(int i = 0; i < CHART_DISPLAY_POINTS; i++)
-                        y2[i] = ring_buffer_ch2[(ch2_trig.trigger_idx + i) % RING_BUFFER_SIZE];
+                        y2[i] = ring_buffer_ch2[(start_idx + i) % RING_BUFFER_SIZE];
                     ser2->start_point = 0;
                     ch2_trig.is_triggered = false;
                     ch2_trig.trigger_armed = false;
@@ -424,10 +425,20 @@ void update_task_cb(lv_timer_t * timer) {
 
         ch1_trig.last_val = val_ch1;
         ch2_trig.last_val = val_ch2;
+        write_idx = (write_idx + 1) % RING_BUFFER_SIZE;
     }
 
     lv_chart_refresh(my_chart);
-    write_idx = (write_idx + 1) % RING_BUFFER_SIZE;
+
+    // FPS 显示（每10帧更新）
+    static int fps_update_cnt = 0;
+    if(++fps_update_cnt >= 10) {
+        fps_update_cnt = 0;
+        uint32_t fps = lv_refr_get_fps_avg();
+        char buf[16];
+        lv_snprintf(buf, sizeof(buf), "FPS:%d", fps);
+        lv_label_set_text(label_fps, buf);
+    }
 
     // 测量计算（每10帧更新一次）
     static int meas_cnt = 0;
@@ -539,7 +550,7 @@ void create_my_chart(void) {
 
     lv_coord_t * y_array = lv_chart_get_y_array(my_chart, ser_trigger);
     for(int i = 0; i < 100; i++) {
-        y_array[i] = trigger_level + ch1_offset;
+        y_array[i] = trigger_level;
     }
 
     lv_obj_add_event_cb(my_chart, chart_draw_event_cb, LV_EVENT_DRAW_PART_BEGIN, NULL);
@@ -708,6 +719,13 @@ void create_controls(void) {
     lv_obj_align(label_meas_ch2, LV_ALIGN_BOTTOM_LEFT, 90, -6);
     lv_obj_set_style_text_font(label_meas_ch2, &lv_font_montserrat_10, 0);
     lv_obj_set_style_text_color(label_meas_ch2, lv_palette_main(LV_PALETTE_BLUE), 0);
+
+    // FPS 标签
+    label_fps = lv_label_create(page);
+    lv_label_set_text(label_fps, "FPS:--");
+    lv_obj_align(label_fps, LV_ALIGN_BOTTOM_RIGHT, -5, -6);
+    lv_obj_set_style_text_font(label_fps, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_color(label_fps, lv_palette_main(LV_PALETTE_GREEN), 0);
 }
 
 void ui_init(void) {

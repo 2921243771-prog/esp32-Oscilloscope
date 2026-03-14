@@ -1,0 +1,18 @@
+// 如果上面的修改还不行，可以尝试这个最简单的测试代码
+// 替换 ui_init() 的内容为：
+
+void ui_init(void) {
+    Serial.println("Creating simple test screen...");
+
+    // 创建一个简单的屏幕
+    lv_obj_t * scr = lv_obj_create(NULL);
+    lv_scr_load(scr);
+
+    // 创建一个标签
+    lv_obj_t * label = lv_label_create(scr);
+    lv_label_set_text(label, "LVGL Test OK!");
+    lv_obj_center(label);
+    lv_obj_set_style_text_color(label, lv_color_hex(0xFFFFFF), 0);
+
+    Serial.println("Simple test screen created!");
+}

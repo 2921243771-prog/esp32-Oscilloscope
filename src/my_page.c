@@ -1,6 +1,8 @@
 #include "lvgl.h"
 #include <math.h>
 
+#define CONSTRAIN(x, low, high) ((x) < (low) ? (low) : ((x) > (high) ? (high) : (x)))
+
 LV_IMG_DECLARE(img_watermark);
 
 // 触发模式枚举
@@ -32,7 +34,7 @@ lv_obj_t * btn_ch2;
 static float angle_ch2 = 0.0f;
 
 // 环形缓冲区（连续数据采集）
-#define RING_BUFFER_SIZE 1024
+#define RING_BUFFER_SIZE 512
 #define CHART_DISPLAY_POINTS 100
 int32_t ring_buffer_ch1[RING_BUFFER_SIZE];
 int32_t ring_buffer_ch2[RING_BUFFER_SIZE];
@@ -99,9 +101,8 @@ void chart_draw_event_cb(lv_event_t * e) {
     }
 }
 
-static lv_point_t touch_last;
-
 void chart_touch_event_cb(lv_event_t * e) {
+    static lv_point_t touch_last;
     lv_indev_t * indev = lv_indev_get_act();
     lv_point_t p;
     lv_indev_get_point(indev, &p);
@@ -111,10 +112,12 @@ void chart_touch_event_cb(lv_event_t * e) {
         touch_last = p;
     } else if(code == LV_EVENT_PRESSING) {
         int16_t dy = touch_last.y - p.y;
-        if(dy != 0) {
+        if(abs(dy) > 1) {
             trigger_level += dy * 2;
+            trigger_level = CONSTRAIN(trigger_level, -200, 200);
             lv_coord_t * y_array = lv_chart_get_y_array(my_chart, ser_trigger);
-            for(int i = 0; i < 100; i++) y_array[i] = trigger_level + ch1_offset;
+            int32_t display_val = trigger_level + ch1_offset;
+            for(int i = 0; i < 100; i++) y_array[i] = display_val;
             lv_obj_invalidate(my_chart);
             touch_last = p;
         }
@@ -333,12 +336,17 @@ void slider_zoom_x_event_cb(lv_event_t * e) {
 
 void update_task_cb(lv_timer_t * timer) {
     static float angle1 = 0.0f;
+    static const float angle_step = 0.15f;
+    static const float angle_max = 314.159f;
 
     for(int s = 0; s < 100; s++) {
-        int32_t val_ch1 = ((int32_t)((sin(angle1) * 6.0f) + 1.0f) + lv_rand(-1, 1)) * 10;
-        int32_t val_ch2 = ((int32_t)((sin(angle_ch2 + 1.5708f) * 6.0f) + 1.0f) + lv_rand(-1, 1)) * 10;
-        angle1 += 0.15f; if(angle1 > 314.159f) angle1 = 0.0f;
-        angle_ch2 += 0.15f; if(angle_ch2 > 314.159f) angle_ch2 = 0.0f;
+        int32_t val_ch1 = ((int32_t)((sinf(angle1) * 6.0f) + 1.0f) + lv_rand(-1, 1)) * 10;
+        int32_t val_ch2 = ((int32_t)((sinf(angle_ch2 + 1.5708f) * 6.0f) + 1.0f) + lv_rand(-1, 1)) * 10;
+
+        angle1 += angle_step;
+        if(angle1 > angle_max) angle1 = 0.0f;
+        angle_ch2 += angle_step;
+        if(angle_ch2 > angle_max) angle_ch2 = 0.0f;
 
         // CH1 处理
         if(ch1_trigger_mode == TRIG_NONE) {
@@ -347,15 +355,22 @@ void update_task_cb(lv_timer_t * timer) {
             ring_buffer_ch1[write_idx] = val_ch1;
             if(!ch1_trig.is_triggered) {
                 if(!ch1_trig.trigger_armed) {
-                    if(ch1_trigger_mode == TRIG_RISING && val_ch1 < trigger_level - 15)
+                    if((ch1_trigger_mode == TRIG_RISING && val_ch1 < trigger_level - 15) ||
+                       (ch1_trigger_mode == TRIG_FALLING && val_ch1 > trigger_level + 15)) {
                         ch1_trig.trigger_armed = true;
-                    else if(ch1_trigger_mode == TRIG_FALLING && val_ch1 > trigger_level + 15)
-                        ch1_trig.trigger_armed = true;
+                    }
                 } else {
                     bool edge = false;
-                    if(ch1_trigger_mode == TRIG_RISING && ch1_trig.last_val < trigger_level && val_ch1 >= trigger_level) edge = true;
-                    else if(ch1_trigger_mode == TRIG_FALLING && ch1_trig.last_val > trigger_level && val_ch1 <= trigger_level) edge = true;
-                    if(edge) { ch1_trig.is_triggered = true; ch1_trig.trigger_idx = write_idx; ch1_trig.capture_count = 0; }
+                    if(ch1_trigger_mode == TRIG_RISING && ch1_trig.last_val < trigger_level && val_ch1 >= trigger_level) {
+                        edge = true;
+                    } else if(ch1_trigger_mode == TRIG_FALLING && ch1_trig.last_val > trigger_level && val_ch1 <= trigger_level) {
+                        edge = true;
+                    }
+                    if(edge) {
+                        ch1_trig.is_triggered = true;
+                        ch1_trig.trigger_idx = write_idx;
+                        ch1_trig.capture_count = 0;
+                    }
                 }
             } else {
                 ch1_trig.capture_count++;
@@ -377,15 +392,22 @@ void update_task_cb(lv_timer_t * timer) {
             ring_buffer_ch2[write_idx] = val_ch2;
             if(!ch2_trig.is_triggered) {
                 if(!ch2_trig.trigger_armed) {
-                    if(ch2_trigger_mode == TRIG_RISING && val_ch2 < trigger_level - 15)
+                    if((ch2_trigger_mode == TRIG_RISING && val_ch2 < trigger_level - 15) ||
+                       (ch2_trigger_mode == TRIG_FALLING && val_ch2 > trigger_level + 15)) {
                         ch2_trig.trigger_armed = true;
-                    else if(ch2_trigger_mode == TRIG_FALLING && val_ch2 > trigger_level + 15)
-                        ch2_trig.trigger_armed = true;
+                    }
                 } else {
                     bool edge = false;
-                    if(ch2_trigger_mode == TRIG_RISING && ch2_trig.last_val < trigger_level && val_ch2 >= trigger_level) edge = true;
-                    else if(ch2_trigger_mode == TRIG_FALLING && ch2_trig.last_val > trigger_level && val_ch2 <= trigger_level) edge = true;
-                    if(edge) { ch2_trig.is_triggered = true; ch2_trig.trigger_idx = write_idx; ch2_trig.capture_count = 0; }
+                    if(ch2_trigger_mode == TRIG_RISING && ch2_trig.last_val < trigger_level && val_ch2 >= trigger_level) {
+                        edge = true;
+                    } else if(ch2_trigger_mode == TRIG_FALLING && ch2_trig.last_val > trigger_level && val_ch2 <= trigger_level) {
+                        edge = true;
+                    }
+                    if(edge) {
+                        ch2_trig.is_triggered = true;
+                        ch2_trig.trigger_idx = write_idx;
+                        ch2_trig.capture_count = 0;
+                    }
                 }
             } else {
                 ch2_trig.capture_count++;
@@ -400,11 +422,12 @@ void update_task_cb(lv_timer_t * timer) {
             }
         }
 
-        lv_chart_refresh(my_chart);
-        write_idx = (write_idx + 1) % RING_BUFFER_SIZE;
         ch1_trig.last_val = val_ch1;
         ch2_trig.last_val = val_ch2;
     }
+
+    lv_chart_refresh(my_chart);
+    write_idx = (write_idx + 1) % RING_BUFFER_SIZE;
 
     // 测量计算（每10帧更新一次）
     static int meas_cnt = 0;
